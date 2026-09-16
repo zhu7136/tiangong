@@ -19,6 +19,7 @@
 from legged_lab.envs.base.base_env import BaseEnv
 from legged_lab.envs.base.base_env_config import BaseAgentCfg, BaseEnvCfg
 from legged_lab.envs.tienkung.run_cfg import TienKungRunAgentCfg, TienKungRunFlatEnvCfg
+from legged_lab.envs.tienkung.run_hu_d04_cfg import HU_D04RunAgentCfg, HU_D04RunFlatEnvCfg
 from legged_lab.envs.tienkung.run_with_sensor_cfg import (
     TienKungRunWithSensorAgentCfg,
     TienKungRunWithSensorFlatEnvCfg,
@@ -36,6 +37,7 @@ from legged_lab.utils.task_registry import task_registry
 
 task_registry.register("walk", TienKungEnv, TienKungWalkFlatEnvCfg(), TienKungWalkAgentCfg())
 task_registry.register("run", TienKungEnv, TienKungRunFlatEnvCfg(), TienKungRunAgentCfg())
+task_registry.register("hu_d04_run", TienKungEnv, HU_D04RunFlatEnvCfg(), HU_D04RunAgentCfg())
 task_registry.register(
     "walk_with_sensor", TienKungEnv, TienKungWalkWithSensorFlatEnvCfg(), TienKungWalkWithSensorAgentCfg()
 )

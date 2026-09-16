@@ -66,6 +66,43 @@ class RobotCfg:
     action_scale: float = 0.25
     terminate_contacts_body_names: list = []
     feet_body_names: list = []
+    # Joint name mappings for different robots
+    left_leg_joints: list = [
+        "hip_roll_l_joint",
+        "hip_pitch_l_joint",
+        "hip_yaw_l_joint",
+        "knee_pitch_l_joint",
+        "ankle_pitch_l_joint",
+        "ankle_roll_l_joint",
+    ]
+    right_leg_joints: list = [
+        "hip_roll_r_joint",
+        "hip_pitch_r_joint",
+        "hip_yaw_r_joint",
+        "knee_pitch_r_joint",
+        "ankle_pitch_r_joint",
+        "ankle_roll_r_joint",
+    ]
+    left_arm_joints: list = [
+        "shoulder_pitch_l_joint",
+        "shoulder_roll_l_joint",
+        "shoulder_yaw_l_joint",
+        "elbow_pitch_l_joint",
+    ]
+    right_arm_joints: list = [
+        "shoulder_pitch_r_joint",
+        "shoulder_roll_r_joint",
+        "shoulder_yaw_r_joint",
+        "elbow_pitch_r_joint",
+    ]
+    ankle_joints: list = [
+        "ankle_pitch_l_joint",
+        "ankle_pitch_r_joint",
+        "ankle_roll_l_joint",
+        "ankle_roll_r_joint",
+    ]
+    feet_body_links: list = ["ankle_roll_l_link", "ankle_roll_r_link"]
+    elbow_body_links: list = ["elbow_pitch_l_link", "elbow_pitch_r_link"]
 
 
 @configclass

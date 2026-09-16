@@ -22,3 +22,5 @@ import toml
 
 # Conveniences to other module directories via relative paths
 ISAAC_ASSET_DIR = os.path.abspath(os.path.dirname(__file__))
+
+from legged_lab.assets.hu_d04 import HU_D04_CFG  # noqa: E402, F401

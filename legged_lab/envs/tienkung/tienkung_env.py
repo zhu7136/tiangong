@@ -33,6 +33,7 @@ from isaaclab.utils.math import quat_apply, quat_conjugate, quat_rotate
 from scipy.spatial.transform import Rotation
 
 from legged_lab.envs.tienkung.run_cfg import TienKungRunFlatEnvCfg
+from legged_lab.envs.tienkung.run_hu_d04_cfg import HU_D04RunFlatEnvCfg
 from legged_lab.envs.tienkung.run_with_sensor_cfg import TienKungRunWithSensorFlatEnvCfg
 from legged_lab.envs.tienkung.walk_cfg import TienKungWalkFlatEnvCfg
 from legged_lab.envs.tienkung.walk_with_sensor_cfg import (
@@ -48,6 +49,7 @@ class TienKungEnv(VecEnv):
         self,
         cfg: (
             TienKungRunFlatEnvCfg
+            | HU_D04RunFlatEnvCfg
             | TienKungWalkFlatEnvCfg
             | TienKungWalkWithSensorFlatEnvCfg
             | TienKungRunWithSensorFlatEnvCfg
@@ -56,6 +58,7 @@ class TienKungEnv(VecEnv):
     ):
         self.cfg: (
             TienKungRunFlatEnvCfg
+            | HU_D04RunFlatEnvCfg
             | TienKungWalkFlatEnvCfg
             | TienKungWalkWithSensorFlatEnvCfg
             | TienKungRunWithSensorFlatEnvCfg
@@ -161,53 +164,29 @@ class TienKungEnv(VecEnv):
         self.feet_cfg.resolve(self.scene)
 
         self.feet_body_ids, _ = self.robot.find_bodies(
-            name_keys=["ankle_roll_l_link", "ankle_roll_r_link"], preserve_order=True
+            name_keys=self.cfg.robot.feet_body_links, preserve_order=True
         )
         self.elbow_body_ids, _ = self.robot.find_bodies(
-            name_keys=["elbow_pitch_l_link", "elbow_pitch_r_link"], preserve_order=True
+            name_keys=self.cfg.robot.elbow_body_links, preserve_order=True
         )
         self.left_leg_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "hip_roll_l_joint",
-                "hip_pitch_l_joint",
-                "hip_yaw_l_joint",
-                "knee_pitch_l_joint",
-                "ankle_pitch_l_joint",
-                "ankle_roll_l_joint",
-            ],
+            name_keys=self.cfg.robot.left_leg_joints,
             preserve_order=True,
         )
         self.right_leg_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "hip_roll_r_joint",
-                "hip_pitch_r_joint",
-                "hip_yaw_r_joint",
-                "knee_pitch_r_joint",
-                "ankle_pitch_r_joint",
-                "ankle_roll_r_joint",
-            ],
+            name_keys=self.cfg.robot.right_leg_joints,
             preserve_order=True,
         )
         self.left_arm_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "shoulder_pitch_l_joint",
-                "shoulder_roll_l_joint",
-                "shoulder_yaw_l_joint",
-                "elbow_pitch_l_joint",
-            ],
+            name_keys=self.cfg.robot.left_arm_joints,
             preserve_order=True,
         )
         self.right_arm_ids, _ = self.robot.find_joints(
-            name_keys=[
-                "shoulder_pitch_r_joint",
-                "shoulder_roll_r_joint",
-                "shoulder_yaw_r_joint",
-                "elbow_pitch_r_joint",
-            ],
+            name_keys=self.cfg.robot.right_arm_joints,
             preserve_order=True,
         )
         self.ankle_joint_ids, _ = self.robot.find_joints(
-            name_keys=["ankle_pitch_l_joint", "ankle_pitch_r_joint", "ankle_roll_l_joint", "ankle_roll_r_joint"],
+            name_keys=self.cfg.robot.ankle_joints,
             preserve_order=True,
         )
 
