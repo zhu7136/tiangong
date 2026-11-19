@@ -34,6 +34,15 @@ class Opener:
 
 
 class BootstrapTests(unittest.TestCase):
+    def test_forward_training_range_stops_at_2p8_target(self):
+        self.assertEqual(worker.FORWARD_COMMAND_RANGE,(1.2,2.8))
+        import ast
+        module=ast.parse((HERE/'train_resume.py').read_text())
+        assignments=[node for node in ast.walk(module) if isinstance(node,ast.Assign)
+                     and any(isinstance(t,ast.Attribute) and t.attr=='lin_vel_x' for t in node.targets)]
+        self.assertEqual(len(assignments),1)
+        self.assertIsInstance(assignments[0].value,ast.Name)
+        self.assertEqual(assignments[0].value.id,'FORWARD_COMMAND_RANGE')
     def setUp(self):
         scratch=HERE.parents[1]/'outputs';scratch.mkdir(exist_ok=True)
         self.temp=tempfile.TemporaryDirectory(prefix='cpu-regression-',dir=scratch)
@@ -103,6 +112,46 @@ class BootstrapTests(unittest.TestCase):
         p=self.work/'config.json';p.write_text('{}');p.chmod(0o644)
         code,event=self.run_main(p);self.assertEqual(code,1)
         self.assertEqual(event['reason'],'private_config_permissions_too_broad')
+    def test_native_flux_uses_only_public_parameters_and_fixed_git_identity(self):
+        manifest=json.loads((HERE.parents[1]/'data/hud04_resume_15500/manifest.json').read_text())
+        def check(config):
+            self.assertEqual(config['output_transport'],'flux_sdk')
+            self.assertEqual(config['input_bytes'],manifest['bytes'])
+            self.assertEqual(config['input_sha256'],manifest['sha256'])
+            self.assertEqual(config['run_id'],'test0001')
+            self.assertNotIn('output_url',config)
+            self.assertNotIn('input_url',config)
+            self.assertTrue(Path(config['git_input_manifest']).is_file())
+            return 0
+        with patch.object(sys,'argv',['train_resume.py','--flux-native','--git-inputs','--run-id','test0001']),patch.object(worker,'parent',side_effect=check):
+            self.assertEqual(worker.main(),0)
+    def test_native_flux_requires_git_inputs(self):
+        out=io.StringIO()
+        with patch.object(sys,'argv',['train_resume.py','--flux-native','--run-id','test0001']),contextlib.redirect_stdout(out):
+            self.assertEqual(worker.main(),1)
+        self.assertEqual(json.loads(out.getvalue())['reason'],'native_flux_requires_git_inputs')
+    def test_native_flux_requires_valid_run_id(self):
+        out=io.StringIO()
+        with patch.object(sys,'argv',['train_resume.py','--flux-native','--git-inputs','--run-id','../other']),contextlib.redirect_stdout(out):
+            self.assertEqual(worker.main(),1)
+        self.assertEqual(json.loads(out.getvalue())['reason'],'invalid_run_id')
+    def test_native_flux_requires_real_platform_context_before_start(self):
+        with patch.dict(os.environ,{'TASK_ID':''}):
+            self.failure('native_flux_task_id_missing',lambda:worker.parent({'output_transport':'flux_sdk'}))
+    def test_native_flux_rejects_uninspected_sdk_before_start(self):
+        import types
+        package=types.ModuleType('coldplay');module=types.ModuleType('coldplay.model_monitor')
+        module.__file__=str(HERE/'train_resume.py');package.model_monitor=module
+        with patch.dict(sys.modules,{'coldplay':package,'coldplay.model_monitor':module}),patch.dict(os.environ,{'TASK_ID':'TASK_20261119_999'}):
+            self.failure('native_flux_monitor_revision_mismatch',lambda:worker.parent({'output_transport':'flux_sdk','native_monitor_sha256':'0'*64}))
+    def test_final_checkpoint_embeds_recoverable_public_configuration(self):
+        import ast
+        tree=ast.parse((HERE/'train_resume.py').read_text())
+        saves=[n for n in ast.walk(tree) if isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute)
+               and n.func.attr=='save' and any(k.arg=='infos' for k in n.keywords)]
+        self.assertEqual(len(saves),1)
+        info=next(k.value for k in saves[0].keywords if k.arg=='infos')
+        self.assertEqual({k.value for k in info.keys},{'hud04_resume_report','environment_yaml','agent_yaml'})
     def test_private_config_must_be_object(self):
         p=self.work/'config.json';p.write_text('[]');p.chmod(0o600)
         code,event=self.run_main(p);self.assertEqual(event['reason'],'private_config_not_an_object')

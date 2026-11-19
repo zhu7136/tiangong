@@ -17,6 +17,8 @@ from input_delivery import InputFailure, prepare_archive
 
 SOURCE_COMMIT = '3e444244d41febad2e2827168c178f6f68d04ea4'
 CHECKPOINT_SHA = 'f3d91b4b0e536c9151d5d27c6a6adc30e44e968010547f3ffec359f16af856c7'
+FORWARD_COMMAND_RANGE = (1.2, 2.8)
+NATIVE_MONITOR_SHA256 = 'ce2cfa301ade8fcb9bc7373e5b5c50843b1f23d311056e46b3427f601b818740'
 
 def emit(stage, **kw):
     print(json.dumps(dict(stage='hud04_resume_'+stage, **kw), allow_nan=False), flush=True)
@@ -86,7 +88,7 @@ def train_child(work):
     emit('simulator_initializing')
     app=AppLauncher(headless=True,fast_shutdown=False).app
     env=None; runner=None
-    report={'source_checkpoint_sha256':CHECKPOINT_SHA,'source_commit':SOURCE_COMMIT,'updates':0,'success':False}
+    report={'source_checkpoint_sha256':CHECKPOINT_SHA,'source_commit':SOURCE_COMMIT,'forward_command_range_mps':list(FORWARD_COMMAND_RANGE),'updates':0,'success':False}
     started=time.monotonic()
     class SoftStop(Exception):pass
     try:
@@ -98,7 +100,7 @@ def train_child(work):
         cfg,agent=task_registry.get_cfgs('hu_d04_run')
         cfg.scene.num_envs=4096
         cfg.scene.seed=agent.seed
-        cfg.commands.ranges.lin_vel_x=(1.2,2.0)
+        cfg.commands.ranges.lin_vel_x=FORWARD_COMMAND_RANGE
         cfg.commands.debug_vis=False
         agent.logger='tensorboard'
         agent.max_iterations=2000
@@ -140,7 +142,13 @@ def train_child(work):
             pass
         runner.current_learning_iteration=initial+report['updates']
         final=work/'final_checkpoint.pt'
-        runner.save(str(final))
+        report.update(success=report['updates']>0,final_iteration=runner.current_learning_iteration,
+                      training_wall_seconds=time.monotonic()-started)
+        runner.save(str(final),infos={
+            'hud04_resume_report':dict(report),
+            'environment_yaml':(logdir/'params/env.yaml').read_text(),
+            'agent_yaml':(logdir/'params/agent.yaml').read_text(),
+        })
         report.update(success=report['updates']>0,final_iteration=runner.current_learning_iteration,checkpoint_bytes=final.stat().st_size,checkpoint_sha256=sha(final),training_wall_seconds=time.monotonic()-started)
         # Re-open the just-saved trusted checkpoint to check the full resume state.
         saved=torch.load(final,map_location='cpu',weights_only=False)
@@ -164,12 +172,27 @@ def train_child(work):
 
 def parent(config):
     root=Path(__file__).resolve().parents[2]
+    native=config.get('output_transport')=='flux_sdk'
     config['_bootstrap_stage']='capability_validation'
-    if time.time()>config['start_before']:raise ValueError('Launch window expired')
-    validate_url(config['output_url'],4200)
+    if native:
+        # gm-run's official monitor captures its initial cwd, before this parent
+        # changes cwd. Refuse to save checkpoints outside that monitored tree.
+        root.relative_to(Path.cwd().resolve())
+        task_id=os.environ.get('TASK_ID','')
+        if not task_id.startswith('TASK_') or not task_id.replace('_','').isalnum():
+            raise InputFailure('native_flux_task_id_missing')
+        import coldplay.model_monitor as monitor
+        monitor_sha=sha(Path(monitor.__file__))
+        if monitor_sha!=config['native_monitor_sha256']:
+            raise InputFailure('native_flux_monitor_revision_mismatch')
+        emit('native_output_ready',task_id=task_id,monitor_sha256=monitor_sha,
+             output_transport='flux_sdk',upload_verified=False)
+    else:
+        if time.time()>config['start_before']:raise ValueError('Launch window expired')
+        validate_url(config['output_url'],4200)
     os.chdir(root)
     commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
-    emit('started',commit=commit,source_commit=SOURCE_COMMIT,max_updates=2000,wall_seconds=3600)
+    emit('started',commit=commit,source_commit=SOURCE_COMMIT,forward_command_range_mps=list(FORWARD_COMMAND_RANGE),max_updates=2000,wall_seconds=3600)
     work=root/'outputs'/('speed-resume-'+config['run_id']); work.mkdir(parents=True,exist_ok=False)
     config['_work_dir']=str(work)
     started=time.monotonic()
@@ -218,6 +241,13 @@ def parent(config):
     report.update(child_returncode=proc.returncode,timed_out=timed_out,worker_commit=commit,cleanup_verified='hud04_resume_cleanup_completed' in seen)
     report['success']=bool(report.get('success') and proc.returncode==0 and not timed_out and report['cleanup_verified'])
     report_path.write_text(json.dumps(report,indent=2,allow_nan=False))
+    if native:
+        # gm-run drains its model monitor after this process exits. Never claim
+        # persistence here: verify the server's final_checkpoint.pt record and
+        # download hash from the sandbox after SDK completion.
+        emit('native_training_finished',**report,output_transport='flux_sdk',upload_verified=False)
+        timer.cancel()
+        return 0 if report['success'] else 1
     with tarfile.open(result,'w:gz') as t:
         for name in ('final_checkpoint.pt','report.json','progress.jsonl','training.log'):
             if (work/name).exists():t.add(work/name,arcname=name)
@@ -241,23 +271,33 @@ def main():
     if len(sys.argv)==3 and sys.argv[1]=='--child':return train_child(Path(sys.argv[2]))
     parser=argparse.ArgumentParser()
     # gm-run echoes argv into platform logs. Base64 is not secret storage.
-    parser.add_argument('--private-config-file',required=True)
+    modes=parser.add_mutually_exclusive_group(required=True)
+    modes.add_argument('--private-config-file')
+    modes.add_argument('--flux-native',action='store_true',help='Use official gm-run checkpoint persistence; no private upload capabilities')
+    parser.add_argument('--run-id')
     parser.add_argument('--git-inputs',action='store_true',help='Use the fixed, ordinary-Git input manifest bundled with this revision')
     args=parser.parse_args()
-    config_path=Path(args.private_config_file)
     sys.argv[:]=sys.argv[:1]
     config={}
     try:
-        if not config_path.is_absolute() or config_path.is_symlink() or not config_path.is_file():
-            raise InputFailure('private_config_missing')
-        if config_path.stat().st_mode & 0o077:
-            raise InputFailure('private_config_permissions_too_broad')
-        if config_path.stat().st_size>65536:
-            raise InputFailure('private_config_size_exceeded')
-        loaded=json.loads(config_path.read_text())
-        if not isinstance(loaded,dict):
-            raise InputFailure('private_config_not_an_object')
-        config=loaded
+        if args.flux_native:
+            if not args.git_inputs:raise InputFailure('native_flux_requires_git_inputs')
+            config={'run_id':args.run_id,'output_transport':'flux_sdk',
+                    'input_bytes':69716909,
+                    'input_sha256':'0078b6fdfd7f8a9fb083614e371f027134b20fde8ee9bcaa7271a052d0a8ce00',
+                    'native_monitor_sha256':NATIVE_MONITOR_SHA256}
+        else:
+            config_path=Path(args.private_config_file)
+            if not config_path.is_absolute() or config_path.is_symlink() or not config_path.is_file():
+                raise InputFailure('private_config_missing')
+            if config_path.stat().st_mode & 0o077:
+                raise InputFailure('private_config_permissions_too_broad')
+            if config_path.stat().st_size>65536:
+                raise InputFailure('private_config_size_exceeded')
+            loaded=json.loads(config_path.read_text())
+            if not isinstance(loaded,dict):
+                raise InputFailure('private_config_not_an_object')
+            config=loaded
         # These fields are derived by the worker, never trusted from input JSON.
         config.pop('_work_dir',None)
         config.pop('_bootstrap_stage',None)
