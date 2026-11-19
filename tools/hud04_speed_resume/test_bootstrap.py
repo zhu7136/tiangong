@@ -130,6 +130,52 @@ class BootstrapTests(unittest.TestCase):
             self.assertNotIn(package,kw['install_requires']);self.assertIn(package,kw['extras_require']['sim2sim'])
     def test_url_allowlist_remains_enforced(self):
         with self.assertRaises(ValueError):worker.validate_url('https://unapproved.invalid/test',1)
+    def git_parts(self):
+        directory=self.work/'git-data';directory.mkdir()
+        parts=[]
+        for i,block in enumerate([self.body[:10],self.body[10:]]):
+            name=f'training-inputs.tar.gz.part{i:03d}'
+            (directory/name).write_bytes(block)
+            parts.append(dict(name=name,bytes=len(block),sha256=hashlib.sha256(block).hexdigest()))
+        manifest=dict(schema_version=1,bytes=len(self.body),sha256=self.config['input_sha256'],parts=parts)
+        path=directory/'manifest.json';path.write_text(json.dumps(manifest))
+        self.config['git_input_manifest']=str(path)
+        return path,manifest
+    def test_git_parts_roundtrip_without_network(self):
+        self.git_parts();op=Opener(error=AssertionError('Network forbidden'))
+        self.assertEqual(self.prepare(opener=op).read_bytes(),self.body)
+        self.assertFalse(op.called);self.assertEqual(self.events[-1]['stage'],'git_parts_verified')
+    def test_git_manifest_identity_mismatch(self):
+        path,manifest=self.git_parts();manifest['sha256']='0'*64;path.write_text(json.dumps(manifest))
+        self.failure('git_manifest_identity_mismatch',self.prepare)
+    def test_git_traversal_rejected(self):
+        path,manifest=self.git_parts();manifest['parts'][0]['name']='../outside';path.write_text(json.dumps(manifest))
+        self.failure('git_part_name_or_order_invalid',self.prepare)
+    def test_git_order_rejected(self):
+        path,manifest=self.git_parts();manifest['parts'].reverse();path.write_text(json.dumps(manifest))
+        self.failure('git_part_name_or_order_invalid',self.prepare)
+    def test_git_corrupt_part_rejected(self):
+        path,manifest=self.git_parts();(path.parent/manifest['parts'][0]['name']).write_bytes(b'Z'*10)
+        self.failure('git_part_sha256_mismatch',self.prepare)
+    def test_git_lfs_pointer_rejected(self):
+        path,manifest=self.git_parts()
+        (path.parent/manifest['parts'][0]['name']).write_bytes(b'version https://git-lfs.github.com/spec/v1\n')
+        self.failure('git_lfs_pointer_rejected',self.prepare)
+    def test_git_part_symlink_rejected(self):
+        path,manifest=self.git_parts();name='training-inputs.tar.gz.part002'
+        (path.parent/name).symlink_to(path.parent/manifest['parts'][0]['name'])
+        manifest['parts'].append(dict(name=name,bytes=10,sha256=manifest['parts'][0]['sha256']))
+        path.write_text(json.dumps(manifest));self.failure('git_part_missing',self.prepare)
+    def test_git_missing_part_rejected(self):
+        path,manifest=self.git_parts();manifest['parts'].append(dict(name='training-inputs.tar.gz.part002',bytes=1,sha256='0'*64))
+        path.write_text(json.dumps(manifest));self.failure('git_part_missing',self.prepare)
+    def test_git_size_limit_rejected(self):
+        path,manifest=self.git_parts();manifest['parts'][0]['bytes']=49*1024*1024;path.write_text(json.dumps(manifest))
+        self.failure('git_part_size_invalid',self.prepare)
+    def test_git_output_not_overwritten(self):
+        self.git_parts();out=self.work/'git-inputs.tar.gz';out.write_bytes(b'preexisting')
+        with self.assertRaises(FileExistsError):self.prepare()
+        self.assertEqual(out.read_bytes(),b'preexisting')
 
 
 if __name__=='__main__':unittest.main(verbosity=2)

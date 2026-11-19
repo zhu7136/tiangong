@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "archive_name": "training-inputs.tar.gz",
+  "bytes": 69716909,
+  "sha256": "0078b6fdfd7f8a9fb083614e371f027134b20fde8ee9bcaa7271a052d0a8ce00",
+  "parts": [
+    {
+      "name": "training-inputs.tar.gz.part000",
+      "bytes": 50331648,
+      "sha256": "e3c6b2d9be35bc3635bf168bcf83f5d4580d139d7411523ef632680c16efcfcc"
+    },
+    {
+      "name": "training-inputs.tar.gz.part001",
+      "bytes": 19385261,
+      "sha256": "55edd5126e75d87c653b516536c370cd198741ee50829b59227859651f58c1b3"
+    }
+  ],
+  "public_publication_authorized": true,
+  "authorization_date_utc": "2026-11-19",
+  "source_checkpoint_sha256": "f3d91b4b0e536c9151d5d27c6a6adc30e44e968010547f3ffec359f16af856c7"
+}

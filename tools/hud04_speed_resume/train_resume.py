@@ -242,6 +242,7 @@ def main():
     parser=argparse.ArgumentParser()
     # gm-run echoes argv into platform logs. Base64 is not secret storage.
     parser.add_argument('--private-config-file',required=True)
+    parser.add_argument('--git-inputs',action='store_true',help='Use the fixed, ordinary-Git input manifest bundled with this revision')
     args=parser.parse_args()
     config_path=Path(args.private_config_file)
     sys.argv[:]=sys.argv[:1]
@@ -263,6 +264,8 @@ def main():
         run_id=config.get('run_id','')
         if not isinstance(run_id,str) or len(run_id)!=8 or not run_id.isascii() or not run_id.isalnum():
             raise InputFailure('invalid_run_id')
+        if args.git_inputs:
+            config['git_input_manifest']=str(Path(__file__).resolve().parents[2]/'data/hud04_resume_15500/manifest.json')
         return parent(config)
     except Exception as error:
         import traceback
