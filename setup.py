@@ -16,13 +16,16 @@
 # with additional modifications by the TienKung-Lab Project,
 # and is distributed under the BSD-3-Clause license.
 
-from distutils.core import setup
-
-from setuptools import find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="LeggedLab",
     packages=find_packages(),
     version="0.1.0",
-    install_requires=["IsaacLab", "pynput", "mujoco==3.3.2", "mujoco-python-viewer", "matplotlib"],
+    # Headless IsaacLab training does not use MuJoCo or desktop keyboard hooks.
+    # Keep pynput -> evdev source builds out of the paid training bootstrap.
+    install_requires=["IsaacLab", "matplotlib"],
+    extras_require={
+        "sim2sim": ["pynput", "mujoco==3.3.2", "mujoco-python-viewer"],
+    },
 )

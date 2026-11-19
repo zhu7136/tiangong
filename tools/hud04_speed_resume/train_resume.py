@@ -1,6 +1,5 @@
 """Single bounded HU_D04 AMP continuation; no account credentials required."""
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -13,6 +12,8 @@ import threading
 import time
 from urllib.parse import urlsplit, parse_qs
 from urllib.request import Request, build_opener, HTTPRedirectHandler
+
+from input_delivery import InputFailure, prepare_archive
 
 SOURCE_COMMIT = '3e444244d41febad2e2827168c178f6f68d04ea4'
 CHECKPOINT_SHA = 'f3d91b4b0e536c9151d5d27c6a6adc30e44e968010547f3ffec359f16af856c7'
@@ -163,13 +164,14 @@ def train_child(work):
 
 def parent(config):
     root=Path(__file__).resolve().parents[2]
+    config['_bootstrap_stage']='capability_validation'
     if time.time()>config['start_before']:raise ValueError('Launch window expired')
-    validate_url(config['input_url'],240)
     validate_url(config['output_url'],4200)
     os.chdir(root)
     commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
     emit('started',commit=commit,source_commit=SOURCE_COMMIT,max_updates=2000,wall_seconds=3600)
     work=root/'outputs'/('speed-resume-'+config['run_id']); work.mkdir(parents=True,exist_ok=False)
+    config['_work_dir']=str(work)
     started=time.monotonic()
     # Independent hard deadline prevents an unresponsive simulator from running indefinitely.
     children=[]
@@ -181,17 +183,11 @@ def parent(config):
         os._exit(124)
     timer=threading.Timer(3590,hard_stop);timer.daemon=True;timer.start()
     opener=build_opener(NoRedirect())
-    archive=work/'inputs.tar.gz'; size=0
-    with opener.open(Request(config['input_url'],headers={'Accept-Encoding':'identity'}),timeout=30) as response,archive.open('xb') as out:
-        if response.status!=200:raise ValueError('Input download failed')
-        while True:
-            block=response.read(1024*1024)
-            if not block:break
-            size+=len(block)
-            if size>config['input_bytes'] or time.monotonic()-started>240:raise ValueError('Input download bound exceeded')
-            out.write(block)
-    if size!=config['input_bytes'] or sha(archive)!=config['input_sha256']:raise ValueError('Archive integrity failed')
+    config['_bootstrap_stage']='input_delivery'
+    archive=prepare_archive(config,work,opener,emit,validate_url)
+    config['_bootstrap_stage']='input_extraction'
     extract_inputs(archive,root)
+    config['_bootstrap_stage']='child_launch'
     (work/'deadline.txt').write_text(str(started+3300))
     env=runtime_environment(root)
     proc=subprocess.Popen([sys.executable,str(Path(__file__).resolve()),'--child',str(work)],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True)
@@ -244,13 +240,44 @@ def parent(config):
 def main():
     if len(sys.argv)==3 and sys.argv[1]=='--child':return train_child(Path(sys.argv[2]))
     parser=argparse.ArgumentParser()
-    parser.add_argument('--private-config-b64',required=True)
+    # gm-run echoes argv into platform logs. Base64 is not secret storage.
+    parser.add_argument('--private-config-file',required=True)
     args=parser.parse_args()
-    config=json.loads(base64.b64decode(args.private_config_b64,validate=True))
+    config_path=Path(args.private_config_file)
     sys.argv[:]=sys.argv[:1]
-    try:return parent(config)
+    config={}
+    try:
+        if not config_path.is_absolute() or config_path.is_symlink() or not config_path.is_file():
+            raise InputFailure('private_config_missing')
+        if config_path.stat().st_mode & 0o077:
+            raise InputFailure('private_config_permissions_too_broad')
+        if config_path.stat().st_size>65536:
+            raise InputFailure('private_config_size_exceeded')
+        loaded=json.loads(config_path.read_text())
+        if not isinstance(loaded,dict):
+            raise InputFailure('private_config_not_an_object')
+        config=loaded
+        # These fields are derived by the worker, never trusted from input JSON.
+        config.pop('_work_dir',None)
+        config.pop('_bootstrap_stage',None)
+        run_id=config.get('run_id','')
+        if not isinstance(run_id,str) or len(run_id)!=8 or not run_id.isascii() or not run_id.isalnum():
+            raise InputFailure('invalid_run_id')
+        return parent(config)
     except Exception as error:
-        emit('bootstrap_failed',error_type=type(error).__name__)
+        import traceback
+        frame=traceback.extract_tb(error.__traceback__)[-1]
+        reason=error.reason if isinstance(error,InputFailure) else 'unclassified_bootstrap_exception'
+        details=error.metrics if isinstance(error,InputFailure) else {}
+        report=dict(success=False,updates=0,error_type=type(error).__name__,reason=reason,
+                    bootstrap_stage=config.get('_bootstrap_stage','config_read'),
+                    location=dict(file=Path(frame.filename).name,line=frame.lineno,function=frame.name),**details)
+        if config.get('_work_dir'):
+            try:
+                (Path(config['_work_dir'])/'report.json').write_text(json.dumps(report,indent=2))
+            except OSError:
+                report['local_report_write_failed']=True
+        emit('bootstrap_failed',**report)
         return 1
 
 if __name__=='__main__':raise SystemExit(main())
