@@ -1,0 +1,82 @@
+{
+  "status": "GPU_AUTHORIZED_PENDING_EXECUTION",
+  "runner": "Existing approved IsaacLab2.1 / IsaacSim4.5 GPU environment; NOT this CPU sandbox",
+  "task": "hu_d04_run",
+  "training_updates": 0,
+  "optimizer_created": false,
+  "checkpoints_compared": [
+    15500,
+    17309
+  ],
+  "parallel_environments": 18,
+  "commands_mps": [
+    1.2,
+    2.0,
+    2.8
+  ],
+  "initial_conditions": [
+    0,
+    1,
+    2
+  ],
+  "simulation_seconds": 12,
+  "control_ticks": 600,
+  "warmup_seconds": 2,
+  "measurement_seconds": 10,
+  "no_auto_reset": true,
+  "qualification": {
+    "vx_relative_error_max": 0.1,
+    "mean_abs_lateral_velocity_max_mps": 0.3,
+    "mean_abs_heading_error_max_degrees": 15.0,
+    "minimum_base_height_m": 0.55,
+    "maximum_tilt_degrees": 60.0,
+    "native_forbidden_contact_force_threshold_N": 1.0
+  },
+  "joint_velocity_limits_rad_s": {
+    "left_hip_pitch_joint": 5.0,
+    "left_hip_roll_joint": 5.0,
+    "left_hip_yaw_joint": 5.0,
+    "left_knee_joint": 5.0,
+    "left_ankle_pitch_joint": 13.6,
+    "left_ankle_roll_joint": 13.6,
+    "right_hip_pitch_joint": 5.0,
+    "right_hip_roll_joint": 5.0,
+    "right_hip_yaw_joint": 5.0,
+    "right_knee_joint": 5.0,
+    "right_ankle_pitch_joint": 13.6,
+    "right_ankle_roll_joint": 13.6,
+    "waist_yaw_joint": 13.599999892434035,
+    "waist_roll_joint": 13.599999892434035,
+    "waist_pitch_joint": 13.599999892434035,
+    "head_yaw_joint": 12.999999286219106,
+    "head_pitch_joint": 12.999999286219106,
+    "left_shoulder_pitch_joint": 19.6,
+    "left_shoulder_roll_joint": 19.6,
+    "left_shoulder_yaw_joint": 19.6,
+    "left_elbow_joint": 19.6,
+    "left_wrist_yaw_joint": 12.999999286219106,
+    "left_wrist_pitch_joint": 12.999999286219106,
+    "left_wrist_roll_joint": 12.999999286219106,
+    "right_shoulder_pitch_joint": 19.6,
+    "right_shoulder_roll_joint": 19.6,
+    "right_shoulder_yaw_joint": 19.6,
+    "right_elbow_joint": 19.6,
+    "right_wrist_yaw_joint": 12.999999286219106,
+    "right_wrist_pitch_joint": 12.999999286219106,
+    "right_wrist_roll_joint": 12.999999286219106
+  },
+  "friction": 0.8,
+  "random_mass": false,
+  "pushes": false,
+  "observation_noise": false,
+  "wall_budget_after_simulator_startup_s": 240,
+  "outside_supervisor_needed": "Bootstrap parent caps setup+child startup/runtime/cleanup; platform scheduling and official SDK drain are outside the child cap.",
+  "script_verification": "Python syntax, CLI and no-opt-in safety guard only; IsaacLab imports/simulator integration NOT tested in CPU sandbox",
+  "required_inputs": [
+    "Existing HU_D04 training repository and rsl_rl source",
+    "Verified full training USD plus dependent assets",
+    "policy_15500.onnx, policy_17309.onnx, deployment_contract.json, native_eval_plan.json"
+  ],
+  "permission": "User explicitly authorized direct GPU evaluation 2026-11-19",
+  "inference_backend": "torch_cpu actor from exact hash-pinned checkpoints; same actor as verified ONNX"
+}
