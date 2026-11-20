@@ -15,6 +15,9 @@ def main():
     p.add_argument('--output',type=Path,required=True)
     p.add_argument('--allow-gpu-eval',action='store_true')
     p.add_argument('--final-checkpoint',type=Path,required=True)
+    p.add_argument('--final-iteration',type=int,default=17309)
+    p.add_argument('--hip-knee-limit',type=float,choices=[5.,8.],default=5.)
+    p.add_argument('--process-exit-after-result',action='store_true',help='Dedicated child only; bypass known hanging simulator teardown after durable report')
     args=p.parse_args()
     if not args.allow_gpu_eval:p.error('Explicit --allow-gpu-eval is required; no simulator was started.')
     args.repo=args.repo.resolve();args.bundle=args.bundle.resolve();args.usd=args.usd.resolve();args.output=args.output.resolve()
@@ -33,6 +36,7 @@ def main():
         from legged_lab.envs import task_registry
         assert torch.cuda.is_available(),'Native GPU runtime required; no CPU fallback'
         cfg,_=task_registry.get_cfgs('hu_d04_run')
+        cfg.scene.robot.actuators['legs'].velocity_limit_sim={n:args.hip_knee_limit for n in cfg.scene.robot.actuators['legs'].velocity_limit_sim}
         assert cfg.sim.dt==.005 and cfg.sim.decimation==4
         assert cfg.robot.action_scale==.25 and cfg.robot.actor_obs_history_length==10
         assert cfg.gait.gait_cycle==.5
@@ -57,9 +61,11 @@ def main():
         assert list(env.robot.joint_names)==contract['joint_names_in_policy_order']
         assert torch.allclose(env.robot.data.default_joint_pos[0],torch.tensor(contract['default_q'],device=env.device),atol=1e-6)
         expected_limits=json.loads((args.bundle/'native_eval_plan.json').read_text())['joint_velocity_limits_rad_s']
+        for n in cfg.scene.robot.actuators['legs'].velocity_limit_sim:expected_limits[n]=args.hip_knee_limit
         actual_limits=env.robot.data.joint_vel_limits[0].detach().cpu().numpy()
         assert np.allclose(actual_limits,[expected_limits[n] for n in env.robot.joint_names],atol=1e-5),'Actual PhysX joint limits differ'
-        metadata=[{'iteration':it,'command_vx':v,'seed':s} for it in [15500,17309] for v in [1.2,2.,2.8] for s in range(3)]
+        print(json.dumps({'stage':'hud04_limit8_eval_limits_verified','hip_knee_limit':args.hip_knee_limit,'actual_limits':actual_limits.tolist()}),flush=True)
+        metadata=[{'iteration':it,'command_vx':v,'seed':s} for it in [15500,args.final_iteration] for v in [1.2,2.,2.8] for s in range(3)]
         command=torch.tensor([r['command_vx'] for r in metadata],device=env.device)
         # Use the native command object and observation builder throughout.
         def fixed_commands(dt=0.):
@@ -101,8 +107,8 @@ def main():
             assert actor[0].in_features==1080 and actor[-1].out_features==31
             return actor
         torch.set_num_threads(1)
-        sessions={15500:load_actor(args.repo/'resume-inputs/model_15500.pt',15500,'f3d91b4b0e536c9151d5d27c6a6adc30e44e968010547f3ffec359f16af856c7'),17309:load_actor(args.final_checkpoint,17309,contract['checkpoint_sha256'])}
-        print(json.dumps({'stage':'hud04_native_eval_actors_loaded','training_updates':0,'iterations':[15500,17309]}),flush=True)
+        sessions={15500:load_actor(args.repo/'resume-inputs/model_15500.pt',15500,'f3d91b4b0e536c9151d5d27c6a6adc30e44e968010547f3ffec359f16af856c7'),args.final_iteration:load_actor(args.final_checkpoint,args.final_iteration,contract['checkpoint_sha256'])}
+        print(json.dumps({'stage':'hud04_native_eval_actors_loaded','training_updates':0,'iterations':[15500,args.final_iteration]}),flush=True)
         args.output.mkdir(parents=True,exist_ok=False)
         active=np.ones(18,dtype=bool);traces=[[] for _ in range(18)];failures=[None]*18
         # 600 control ticks = 12 simulated seconds, 2s warmup + 10s measurement.
@@ -118,10 +124,14 @@ def main():
                 gravity=env.robot.data.projected_gravity_b.detach().cpu().numpy()
                 qs=env.robot.data.root_quat_w.detach().cpu().numpy()
                 terminated=done.detach().cpu().numpy();t=(step+1)*.02
+                joint_dq=env.robot.data.joint_vel.detach().cpu().numpy()
+                torque=env.robot.data.applied_torque.detach().cpu().numpy()
+                effort_limits=env.robot.data.joint_effort_limits[0].detach().cpu().numpy()
                 for i in np.flatnonzero(active):
                     w,xq,yq,zq=qs[i];yaw=float(np.degrees(np.arctan2(2*(w*zq+xq*yq),1-2*(yq*yq+zq*zq))))
                     tilt=float(np.degrees(np.arccos(np.clip(-gravity[i,2],-1,1))))
                     row={'step':step+1,'env':int(i),'t':t,'x':float(pos[i,0]),'y':float(pos[i,1]),'z':float(pos[i,2]),'vx':float(vel[i,0]),'vy':float(vel[i,1]),'yaw_deg':yaw,'tilt_deg':tilt}
+                    row.update(joint_vel_rad_s=joint_dq[i].tolist(),applied_torque_nm=torque[i].tolist())
                     traces[i].append(row);log.write(json.dumps(row,allow_nan=False)+'\n')
                     reason=('native_termination_contact' if terminated[i] else 'base_height_below_0.55m' if pos[i,2]<.55 else 'tilt_above_60deg' if tilt>60 else None)
                     if reason:failures[i]=reason;active[i]=False
@@ -136,9 +146,13 @@ def main():
             mae_heading=float(np.mean([abs(r['yaw_deg']) for r in window])) if complete else None
             qualifies=bool(complete and abs(measured-meta['command_vx'])<=.1*meta['command_vx'] and mae_y<.3 and mae_heading<15.)
             results.append({**meta,'survived_12s':complete,'qualified_target_tracking':qualifies,'failure':failures[i],'elapsed_s':len(traces[i])*.02,'qualified_window_vx_mps':measured,'mean_abs_vy':mae_y,'mean_abs_heading_deg':mae_heading})
-        report={'classification':'native_physx_evaluation','training_updates':0,'wall_seconds':time.monotonic()-started,'auto_reset_disabled':True,'blocked_reset_calls':blocked_reset_calls,'inference_backend':'torch_cpu_deterministic_actor','checkpoint_sha256':contract['checkpoint_sha256'],'results':results}
+        report={'classification':'native_physx_evaluation','training_updates':0,'wall_seconds':time.monotonic()-started,'auto_reset_disabled':True,'blocked_reset_calls':blocked_reset_calls,'inference_backend':'torch_cpu_deterministic_actor','checkpoint_sha256':contract['checkpoint_sha256'],'results':results,'joint_names':list(env.robot.joint_names),'joint_velocity_limits':actual_limits.tolist(),'joint_effort_limits':effort_limits.tolist(),'hip_knee_limit':args.hip_knee_limit,'cleanup_mode':'dedicated_process_exit' if args.process_exit_after_result else 'app.close'}
         (args.output/'native_results.json').write_text(json.dumps(report,indent=2,allow_nan=False))
         print(json.dumps({'result_file':str(args.output/'native_results.json'),'completed':True}),flush=True)
+        if args.process_exit_after_result:
+            # Report and trace files are closed. A dedicated child-process exit
+            # releases GPU resources without claiming graceful simulator cleanup.
+            sys.stdout.flush();os._exit(0)
     finally:
         app.close(wait_for_replicator=False)
         print(json.dumps({'stage':'hud04_native_eval_cleanup_completed'}),flush=True)
